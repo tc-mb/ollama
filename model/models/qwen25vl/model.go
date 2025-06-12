@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image"
 	"slices"
-	"sync"
 
 	"github.com/ollama/ollama/fs"
 	"github.com/ollama/ollama/kvcache"
@@ -35,12 +34,13 @@ func New(c fs.Config) (model.Model, error) {
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Types:  c.Ints("tokenizer.ggml.token_type"),
 				Merges: c.Strings("tokenizer.ggml.merges"),
-				BOS:    int32(c.Uint("tokenizer.ggml.bos_token_id")),
-				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", false),
-				EOS:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
+				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", true),
+				BOS:    []int32{int32(c.Uint("tokenizer.ggml.bos_token_id"))},
 				AddEOS: c.Bool("tokenizer.ggml.add_eos_token", false),
-				EOT:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
-				AddEOT: c.Bool("tokenizer.ggml.add_eos_token", false),
+				EOS: append(
+					[]int32{int32(c.Uint("tokenizer.ggml.eos_token_id"))},
+					c.Ints("tokenizer.ggml.eos_token_ids")...,
+				),
 			},
 		),
 		TextModel:      NewTextModel(c),
@@ -69,15 +69,12 @@ func (m *Model) PixelValues(ctx ml.Context, multimodalData []byte) (ml.Tensor, *
 		m.ImageProcessor.patchSize * m.ImageProcessor.patchSize
 	numPatches := grid.Temporal * grid.Height * grid.Width
 
-	pixelValues, err := ctx.Input().FromFloatSlice(f32s, patchDim, numPatches)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create tensor from image: %w", err)
-	}
+	pixelValues := ctx.Input().FromFloatSlice(f32s, patchDim, numPatches)
 
 	return pixelValues, grid, nil
 }
 
-func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, error) {
+func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) ([]input.Multimodal, error) {
 	if len(m.VisionModel.Layers) == 0 {
 		return nil, model.ErrNoVisionModel
 	}
@@ -88,31 +85,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 	}
 
 	visionOutputs := m.VisionModel.Forward(ctx, pixels, grid)
-	return &chunks{Model: m, Tensor: visionOutputs}, nil
-}
-
-type chunks struct {
-	*Model
-	ml.Tensor
-
-	dataOnce sync.Once
-	data     []float32
-}
-
-type chunk struct {
-	*chunks
-	s, n int
-}
-
-func (r *chunk) floats() []float32 {
-	r.dataOnce.Do(func() {
-		temp := r.Backend().NewContext()
-		defer temp.Close()
-		temp.Forward(r.Tensor).Compute(r.Tensor)
-		r.data = r.Floats()
-	})
-
-	return r.data[r.s*r.Dim(0) : (r.s+r.n)*r.Dim(0)]
+	return []input.Multimodal{{Tensor: visionOutputs}}, nil
 }
 
 // PostTokenize arranges Qwen-2.5-VL's inputs for the forward pass
@@ -142,18 +115,15 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 				result = append(result, input.Input{Token: pre[i]})
 			}
 
-			// This is an image token with multimodal data
-			chunksData := inp.Multimodal.(*chunks)
-			patchesPerChunk := chunksData.Dim(1)
+			patchesPerChunk := inp.Multimodal[0].Tensor.Dim(1)
 
 			// First add the vision start token
-			result = append(result, input.Input{Token: visionStartToken, SameBatch: patchesPerChunk + 2})
+			result = append(result, input.Input{Token: visionStartToken})
 
 			// Add the image token with the multimodal tensor data at the first position
-			// Create a chunk with proper s and n values
 			result = append(result, input.Input{
 				Token:          imageToken,
-				Multimodal:     &chunk{chunks: chunksData, s: 0, n: patchesPerChunk},
+				Multimodal:     inp.Multimodal,
 				MultimodalHash: inp.MultimodalHash,
 				SameBatch:      patchesPerChunk,
 			})
@@ -169,15 +139,8 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 }
 
 func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
-	positions, err := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
-	if err != nil {
-		return nil, err
-	}
-
-	outputs, err := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
-	if err != nil {
-		return nil, err
-	}
+	positions := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
+	outputs := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
 
 	return m.TextModel.Forward(ctx, batch.Inputs, positions, outputs, batch, m.Cache)
 }

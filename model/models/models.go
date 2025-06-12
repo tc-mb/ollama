@@ -8,5 +8,7 @@ import (
 	_ "github.com/ollama/ollama/model/models/minicpm_o_2_6"
 	_ "github.com/ollama/ollama/model/models/mistral3"
 	_ "github.com/ollama/ollama/model/models/mllama"
+	_ "github.com/ollama/ollama/model/models/qwen2"
 	_ "github.com/ollama/ollama/model/models/qwen25vl"
+	_ "github.com/ollama/ollama/model/models/qwen3"
 )
