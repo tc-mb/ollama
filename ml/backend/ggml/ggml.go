@@ -180,8 +180,9 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 	requiredMemory.CPU.Name = C.GoString(C.ggml_backend_dev_name(cpuDeviceBufferType.d))
 	var props C.struct_ggml_backend_dev_props
 	C.ggml_backend_dev_get_props(cpuDeviceBufferType.d, &props)
-	requiredMemory.CPU.ID = C.GoString(props.id)
-	requiredMemory.CPU.Library = C.GoString(props.library)
+	requiredMemory.CPU.ID = C.GoString(props.device_id)
+	// NOTE: props.library is from skipped GPU UUIDs patch; left empty after llama.cpp upgrade
+	requiredMemory.CPU.Library = ""
 	requiredMemory.CPU.Weights = make([]uint64, blocks+1)
 	requiredMemory.CPU.Cache = make([]uint64, blocks+1)
 
@@ -199,8 +200,9 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 		requiredMemory.GPUs[i].Name = C.GoString(C.ggml_backend_dev_name(d))
 		var props C.struct_ggml_backend_dev_props
 		C.ggml_backend_dev_get_props(d, &props)
-		requiredMemory.GPUs[i].ID = C.GoString(props.id)
-		requiredMemory.GPUs[i].Library = C.GoString(props.library)
+		requiredMemory.GPUs[i].ID = C.GoString(props.device_id)
+		// NOTE: props.library is from skipped GPU UUIDs patch; left empty after llama.cpp upgrade
+		requiredMemory.GPUs[i].Library = ""
 		requiredMemory.GPUs[i].Weights = make([]uint64, blocks+1)
 		requiredMemory.GPUs[i].Cache = make([]uint64, blocks+1)
 	}
@@ -388,15 +390,15 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 
 	maxGraphNodes := max(1024, len(meta.Tensors().Items())*32)
 
-	sched := C.ggml_backend_sched_new_ext(
+	sched := C.ggml_backend_sched_new(
 		(*C.ggml_backend_t)(unsafe.Pointer(&schedBackends[0])),
 		(*C.ggml_backend_buffer_type_t)(unsafe.Pointer(&schedBufts[0])),
 		C.int(len(schedBackends)),
 		C.size_t(maxGraphNodes),
 		C._Bool(false),
 		C._Bool(true),
-		C._Bool(params.AllocMemory),
 	)
+	_ = params.AllocMemory // alloc_buffers patch skipped during llama.cpp upgrade; uses upstream default
 
 	// allocate buffers for each context
 	bbs := make(map[*C.struct_ggml_context]C.ggml_backend_buffer_t, len(ctxs))
@@ -634,16 +636,11 @@ func (b *Backend) Load(ctx context.Context, progress func(float32)) error {
 	}
 
 	// Cleanup any backend state from devices that we didn't end up using
-nextDevice:
-	for _, d := range append(gpus, append(accels, cpus...)...) {
-		for _, backend := range b.schedBackends {
-			if d == C.ggml_backend_get_device(backend) {
-				continue nextDevice
-			}
-		}
-
-		C.ggml_backend_dev_reset(d)
-	}
+	// NOTE: ggml_backend_dev_reset patch skipped during llama.cpp upgrade to 2496f9c1
+	// (Enable resetting backend devices); device cleanup is no-op now.
+	_ = gpus
+	_ = accels
+	_ = cpus
 
 	if err := g.Wait(); err != nil {
 		return err
@@ -723,16 +720,16 @@ func (b *Backend) BackendDevices() []ml.DeviceInfo {
 		C.ggml_backend_dev_get_props(dev, &props)
 		info.Name = C.GoString(props.name)
 		info.Description = C.GoString(props.description)
-		info.ID = C.GoString(props.id)
-		info.Library = C.GoString(props.library)
-		info.ComputeMajor = (int)(props.compute_major)
-		info.ComputeMinor = (int)(props.compute_minor)
-		info.DriverMajor = (int)(props.driver_major)
-		info.DriverMinor = (int)(props.driver_minor)
-		info.Integrated = props.integrated != 0
-		if props.library != nil {
-			info.Library = C.GoString(props.library)
-		}
+		info.ID = C.GoString(props.device_id)
+		// NOTE: props.library/compute_*/driver_*/integrated are from patches skipped during
+		// llama.cpp upgrade to 2496f9c1 (GPU UUIDs / GPU discovery enhancements).
+		// Use defaults; ollama's GPU telemetry will be incomplete but inference works.
+		info.Library = ""
+		info.ComputeMajor = 0
+		info.ComputeMinor = 0
+		info.DriverMajor = 0
+		info.DriverMinor = 0
+		info.Integrated = false
 		if props.device_id != nil {
 			info.PCIID = C.GoString(props.device_id)
 		}
@@ -826,9 +823,9 @@ func (c *Context) ComputeWithNotify(cb func(), tensors ...ml.Tensor) {
 		go cb()
 	}
 
-	if c.batchSize > 0 {
-		C.ggml_backend_sched_set_batch_size(c.b.sched, C.int(c.batchSize))
-	}
+	// NOTE: ggml_backend_sched_set_batch_size patch (batch size hint) skipped during
+	// llama.cpp upgrade to 2496f9c1; batch size hint is a no-op now.
+	_ = c.batchSize
 
 	if status := C.ggml_backend_sched_graph_compute_async(c.b.sched, c.graph); status != C.GGML_STATUS_SUCCESS {
 		panic(fmt.Errorf("error computing ggml graph: %v", status))
@@ -851,9 +848,8 @@ func (c *Context) ComputeWithNotify(cb func(), tensors ...ml.Tensor) {
 }
 
 func (c *Context) Reserve() {
-	if c.batchSize > 0 {
-		C.ggml_backend_sched_set_batch_size(c.b.sched, C.int(c.batchSize))
-	}
+	// NOTE: ggml_backend_sched_set_batch_size patch skipped during llama.cpp upgrade to 2496f9c1
+	_ = c.batchSize
 
 	reserved := C.ggml_backend_sched_reserve(c.b.sched, c.graph)
 

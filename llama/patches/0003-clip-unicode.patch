@@ -5,17 +5,19 @@ Subject: [PATCH] clip-unicode
 
 fixes loading vision models in llama.cpp on windows
 filesystems for paths that include wide characters
+
+Signed-off-by: tc-mb <tianchi_cai@icloud.com>
 ---
- tools/mtmd/clip.cpp | 39 +++++++++++++++++++++++++++++++++++++++
- 1 file changed, 39 insertions(+)
+ tools/mtmd/clip.cpp | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
 
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index 35e3aef0a..84a3796b5 100644
+index 513b94f2a..c0c2b2fe1 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
-@@ -24,6 +24,19 @@
- #include <array>
+@@ -26,6 +26,19 @@
  #include <functional>
+ #include <float.h>
  
 +#if defined(_WIN32)
 +#define WIN32_LEAN_AND_MEAN
@@ -33,37 +35,40 @@ index 35e3aef0a..84a3796b5 100644
  struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
  
  //#define CLIP_DEBUG_FUNCTIONS
-@@ -1619,7 +1632,29 @@ struct clip_model_loader {
-         {
-             std::vector<uint8_t> read_buf;
+@@ -1615,7 +1628,32 @@ struct clip_model_loader {
+         std::map<std::string, size_t> tensor_offset;
+         std::vector<ggml_tensor *> tensors_to_load;
  
++#if defined(_WIN32) && defined(__GLIBCXX__)
++        int fd = -1;
++#endif
 +#ifdef _WIN32
-+            int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
-+            if (!wlen) {
-+                throw std::runtime_error(string_format("%s: failed to convert filename to wide string\n", __func__));
-+            }
-+            wchar_t * wbuf = (wchar_t *) malloc(wlen * sizeof(wchar_t));
-+            wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wbuf, wlen);
-+            if (!wlen) {
-+                free(wbuf);
-+                throw std::runtime_error(string_format("%s: failed to convert filename to wide string\n", __func__));
-+            }
-+#if __GLIBCXX__
-+            int fd = _wopen(wbuf, _O_RDONLY | _O_BINARY);
-+            __gnu_cxx::stdio_filebuf<char> buffer(fd, std::ios_base::in);
-+            std::istream fin(&buffer);
-+#else // MSVC
-+            // unused in our current build
-+            auto fin = std::ifstream(wbuf, std::ios::binary);
-+#endif
++        int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
++        if (!wlen) {
++            throw std::runtime_error(string_format("%s: failed to convert filename to wide string\n", __func__));
++        }
++        wchar_t * wbuf = (wchar_t *) malloc(wlen * sizeof(wchar_t));
++        wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wbuf, wlen);
++        if (!wlen) {
 +            free(wbuf);
-+#else
-             auto fin = std::ifstream(fname, std::ios::binary);
++            throw std::runtime_error(string_format("%s: failed to convert filename to wide string\n", __func__));
++        }
++#if __GLIBCXX__
++        fd = _wopen(wbuf, _O_RDONLY | _O_BINARY);
++        __gnu_cxx::stdio_filebuf<char> buffer(fd, std::ios_base::in);
++        std::istream fin(&buffer);
++#else // MSVC
++        // unused in our current build
++        auto fin = std::ifstream(wbuf, std::ios::binary);
 +#endif
-             if (!fin) {
-                 throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
-             }
-@@ -1646,7 +1681,11 @@ struct clip_model_loader {
++        free(wbuf);
++#else
+         auto fin = std::ifstream(fname, std::ios::binary);
++#endif
+         if (!fin) {
+             throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
+         }
+@@ -2590,7 +2628,11 @@ struct clip_model_loader {
                      ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
                  }
              }

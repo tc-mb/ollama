@@ -21,7 +21,11 @@ struct common_sampler *common_sampler_cinit(const struct llama_model *model, str
         sparams.penalty_freq = params->penalty_freq;
         sparams.penalty_present = params->penalty_present;
         sparams.seed = params->seed;
-        sparams.grammar = params->grammar;
+        // Upstream changed common_grammar from string to struct after llama.cpp upgrade to 2496f9c1
+        sparams.grammar = common_grammar{};
+        if (params->grammar) {
+            sparams.grammar.grammar = std::string(params->grammar);
+        }
         sparams.xtc_probability = 0.0;
         sparams.xtc_threshold = 0.5;
         return common_sampler_init(model, sparams);
@@ -72,8 +76,30 @@ struct llama_vocab * llama_load_vocab_from_file(const char * fname) {
     try {
         const auto kv = LLM_KV(LLM_ARCH_UNKNOWN);
         std::vector<std::string> splits = {};
-        llama_model_loader ml(std::string(fname), splits, false, false, false, nullptr, nullptr);
+        // Upstream llama_model_loader constructor changed to 12 args after llama.cpp upgrade
+        // to 2496f9c1. Pre-load gguf metadata so model_loader can use it.
+        struct gguf_init_params gguf_params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+        gguf_context * meta = gguf_init_from_file(fname, gguf_params);
+        if (!meta) {
+            LLAMA_LOG_ERROR("%s: failed to read gguf metadata from %s\n", __func__, fname);
+            delete vocab;
+            return nullptr;
+        }
+        llama_model_loader ml(
+            meta,           // gguf_context * metadata
+            nullptr,        // set_tensor_data
+            nullptr,        // set_tensor_data_ud
+            std::string(fname),
+            splits,         // splits
+            nullptr,        // FILE * file
+            false,          // use_mmap
+            false,          // use_direct_io
+            false,          // check_tensors
+            true,           // no_alloc (we only need vocab)
+            nullptr,        // kv_override
+            nullptr);       // buft_override
         vocab->load(ml, kv);
+        gguf_free(meta);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return nullptr;

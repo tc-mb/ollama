@@ -1,12 +1,20 @@
 protect .rsync-filter
 protect *.go
 include /common/
+include /common/*.h
+include /common/*.hpp
 include /common/base64.*
 include /common/common.*
 include /common/json-schema-to-grammar.*
 include /common/json.*
 include /common/log.*
 include /common/sampling.*
+include /common/fit.*
+include /common/debug.*
+include /common/reasoning-budget.*
+include /common/unicode.*
+# NOTE: arg.h is needed (header pulled in by *.h above) but arg.cpp pulls in
+# jinja/chat machinery that ollama does not use, so do NOT include arg.cpp.
 include /include/
 include /include/llama.*
 include /include/llama-*.*
@@ -17,9 +25,15 @@ include /tools/mtmd/clip.cpp
 include /tools/mtmd/mtmd.cpp
 include /tools/mtmd/mtmd-audio.cpp
 include /tools/mtmd/mtmd-helper.cpp
+include /tools/mtmd/mtmd-image.cpp
 include /tools/mtmd/models/
 include /tools/mtmd/models/*.h
 include /tools/mtmd/models/*.cpp
+include /tools/mtmd/debug/
+include /tools/mtmd/debug/*.h
+# NOTE: do NOT include debug/*.cpp; mtmd-debug.cpp is a standalone CLI tool
+# (with its own main() pulling in arg.cpp/jinja); ollama only needs the header
+# because the real implementations live in tools/mtmd/mtmd.cpp.
 include /src/
 include /src/llama.*
 include /src/llama-*.*

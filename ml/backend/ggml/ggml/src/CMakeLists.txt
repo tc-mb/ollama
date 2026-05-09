@@ -200,14 +200,12 @@ add_library(ggml-base
             ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
+            ggml-backend-meta.cpp
             ggml-opt.cpp
             ggml-threading.cpp
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
-            mem_hip.cpp
-            mem_nvml.cpp
-            mem_dxgi_pdh.cpp
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
@@ -225,6 +223,7 @@ if (GGML_SCHED_NO_REALLOC)
 endif()
 
 add_library(ggml
+            ggml-backend-dl.cpp
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
 
@@ -362,12 +361,30 @@ if (GGML_CPU_ALL_VARIANTS)
     add_custom_target(ggml-cpu)
     if (GGML_SYSTEM_ARCH STREQUAL "x86")
         ggml_add_cpu_backend_variant(x64)
-        ggml_add_cpu_backend_variant(sse42        SSE42)
-        ggml_add_cpu_backend_variant(sandybridge  SSE42 AVX)
-        ggml_add_cpu_backend_variant(haswell      SSE42 AVX F16C AVX2 BMI2 FMA)
-        ggml_add_cpu_backend_variant(skylakex     SSE42 AVX F16C AVX2 BMI2 FMA AVX512)
-        ggml_add_cpu_backend_variant(icelake      SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
-        ggml_add_cpu_backend_variant(alderlake    SSE42 AVX F16C AVX2 BMI2 FMA AVX_VNNI)
+        ggml_add_cpu_backend_variant(sse42              SSE42)
+        ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)
+        if (NOT MSVC)
+            # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
+            ggml_add_cpu_backend_variant(ivybridge      SSE42 AVX F16C)
+            ggml_add_cpu_backend_variant(piledriver     SSE42 AVX F16C FMA)
+        endif()
+        ggml_add_cpu_backend_variant(haswell            SSE42 AVX F16C FMA AVX2 BMI2)
+        ggml_add_cpu_backend_variant(skylakex           SSE42 AVX F16C FMA AVX2 BMI2 AVX512)
+        ggml_add_cpu_backend_variant(cannonlake         SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI)
+        ggml_add_cpu_backend_variant(cascadelake        SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VNNI)
+        ggml_add_cpu_backend_variant(icelake            SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI AVX512_VNNI)
+        if (NOT MSVC)
+            # MSVC 2022 doesn't support BF16 intrinsics without `/arch:AVX10.1` ?!
+            # https://learn.microsoft.com/en-us/cpp/intrinsics/x64-amd64-intrinsics-list?view=msvc-170
+            # https://learn.microsoft.com/en-us/cpp/build/reference/arch-x64?view=msvc-170
+            ggml_add_cpu_backend_variant(cooperlake     SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VNNI AVX512_BF16)
+            ggml_add_cpu_backend_variant(zen4           SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16)
+        endif()
+        ggml_add_cpu_backend_variant(alderlake          SSE42 AVX F16C FMA AVX2 BMI2 AVX_VNNI)
+        if (NOT MSVC)
+            # MSVC doesn't support AMX
+            ggml_add_cpu_backend_variant(sapphirerapids SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
+        endif()
     elseif(GGML_SYSTEM_ARCH STREQUAL "ARM")
         if (CMAKE_SYSTEM_NAME MATCHES "Linux")
             # Many of these features are optional so we build versions with popular
@@ -387,6 +404,9 @@ if (GGML_CPU_ALL_VARIANTS)
             ggml_add_cpu_backend_variant(android_armv8.2_1    DOTPROD)
             ggml_add_cpu_backend_variant(android_armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC)
             ggml_add_cpu_backend_variant(android_armv8.6_1    DOTPROD FP16_VECTOR_ARITHMETIC MATMUL_INT8)
+            ggml_add_cpu_backend_variant(android_armv9.0_1    DOTPROD MATMUL_INT8 FP16_VECTOR_ARITHMETIC SVE2)
+            ggml_add_cpu_backend_variant(android_armv9.2_1    DOTPROD MATMUL_INT8 FP16_VECTOR_ARITHMETIC SVE SME)
+            ggml_add_cpu_backend_variant(android_armv9.2_2    DOTPROD MATMUL_INT8 FP16_VECTOR_ARITHMETIC SVE SVE2 SME)
         elseif (APPLE)
             ggml_add_cpu_backend_variant(apple_m1             DOTPROD)
             ggml_add_cpu_backend_variant(apple_m2_m3          DOTPROD MATMUL_INT8)
@@ -435,6 +455,7 @@ ggml_add_backend(HIP)
 ggml_add_backend(METAL)
 ggml_add_backend(MUSA)
 ggml_add_backend(RPC)
+ggml_add_backend(VirtGPU)
 ggml_add_backend(SYCL)
 ggml_add_backend(Vulkan)
 ggml_add_backend(WebGPU)
@@ -442,6 +463,7 @@ ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
 ggml_add_backend(Hexagon)
 ggml_add_backend(ZenDNN)
+ggml_add_backend(OPENVINO)
 
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)
@@ -450,11 +472,10 @@ endforeach()
 
 target_link_libraries(ggml-base PRIVATE Threads::Threads)
 
-find_library(MATH_LIBRARY m)
-if (MATH_LIBRARY)
-    if (NOT WIN32 OR NOT DEFINED ENV{ONEAPI_ROOT})
-        target_link_libraries(ggml-base PRIVATE m)
-    endif()
+if (DEFINED MATH_LIBRARY)
+    target_link_libraries(ggml-base PRIVATE ${MATH_LIBRARY})
+elseif (NOT WIN32 AND NOT DEFINED ENV{ONEAPI_ROOT})
+    target_link_libraries(ggml-base PRIVATE m)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Android")

@@ -26,17 +26,12 @@ extern "C" {
         size_t                (*get_alloc_size)(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
         // (optional) check if tensor data is in host memory and uses standard ggml tensor layout (defaults to false)
         bool                  (*is_host)       (ggml_backend_buffer_type_t buft);
-
-        // (optional) returns a dummy buffer that is equivalent to one created by alloc_buffer but without actually being backed
-        // by memory
-        ggml_backend_buffer_t (*noalloc_buffer)(ggml_backend_buffer_type_t buft, size_t size);
     };
 
     struct ggml_backend_buffer_type {
         struct ggml_backend_buffer_type_i  iface;
         ggml_backend_dev_t device;
         void * context;
-        bool no_alloc;
     };
 
     //
@@ -54,6 +49,10 @@ extern "C" {
         void         (*memset_tensor)(ggml_backend_buffer_t buffer,       struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
         void         (*set_tensor)   (ggml_backend_buffer_t buffer,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
         void         (*get_tensor)   (ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size);
+        // (optional) 2d data copies
+        void         (*set_tensor_2d)(ggml_backend_buffer_t buffer,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
+        void         (*get_tensor_2d)(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
+
         // (optional) tensor copy: dst is in the buffer, src may be in any buffer, including buffers from a different backend (return false if not supported)
         bool         (*cpy_tensor)   (ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst);
         // clear the entire buffer
@@ -68,7 +67,6 @@ extern "C" {
         void * context;
         size_t size;
         enum ggml_backend_buffer_usage usage;
-        bool no_alloc;
     };
 
     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(
@@ -87,6 +85,20 @@ extern "C" {
     GGML_API void                  ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
 
     //
+    // Backend (meta)
+    //
+
+    GGML_API bool ggml_backend_is_meta       (ggml_backend_t backend);
+    GGML_API bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf);
+    GGML_API bool ggml_backend_buft_is_meta  (ggml_backend_buffer_type_t buft);
+
+    GGML_API size_t         ggml_backend_meta_n_backends    (ggml_backend_t meta_backend);
+    GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
+
+    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
+    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
+
+    //
     // Backend (stream)
     //
 
@@ -96,8 +108,10 @@ extern "C" {
         void (*free)(ggml_backend_t backend);
 
         // (optional) asynchronous tensor data access
-        void (*set_tensor_async)(ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
-        void (*get_tensor_async)(ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size);
+        void (*set_tensor_async)   (ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+        void (*get_tensor_async)   (ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size);
+        void (*set_tensor_2d_async)(ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
+        void (*get_tensor_2d_async)(ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
         bool (*cpy_tensor_async)(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
 
         // (optional) complete all pending operations (required if the backend supports async operations)
@@ -112,8 +126,8 @@ extern "C" {
         // compute the graph with the plan
         enum ggml_status          (*graph_plan_compute)(ggml_backend_t backend, ggml_backend_graph_plan_t plan);
 
-        // compute graph (always async if supported by the backend). batch_size may be -1 if unknown
-        enum ggml_status          (*graph_compute)     (ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size);
+        // compute graph (always async if supported by the backend)
+        enum ggml_status          (*graph_compute)     (ggml_backend_t backend, struct ggml_cgraph * cgraph);
 
         // (optional) event synchronization
         // record an event on this stream
@@ -123,16 +137,6 @@ extern "C" {
 
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
-
-        // (optional) reserves intermediate buffers needed for the compution
-        // if alloc is true, memory is actually allocated, otherwise the required amount is just returned by buffer_size
-        enum ggml_status          (*graph_reserve)     (ggml_backend_t backend, struct ggml_cgraph * cgraph, bool alloc);
-
-        // (optional) returns the memory needed after calling graph_reserve
-        size_t                    (*buffer_size)       (ggml_backend_t backend);
-
-        // (optional) frees memory from intermediate buffers that was allocated either by graph_compute or graph_reserve
-        void                      (*reset)             (ggml_backend_t backend);
     };
 
     struct ggml_backend {
@@ -160,7 +164,7 @@ extern "C" {
         // device description: short informative description of the device, could be the model name
         const char * (*get_description)(ggml_backend_dev_t dev);
 
-        // device memory in bytes
+        // device memory in bytes: 0 bytes to indicate no memory to report
         void         (*get_memory)(ggml_backend_dev_t dev, size_t * free, size_t * total);
 
         // device type
@@ -195,10 +199,6 @@ extern "C" {
         ggml_backend_event_t (*event_new)         (ggml_backend_dev_t dev);
         void                 (*event_free)        (ggml_backend_dev_t dev, ggml_backend_event_t event);
         void                 (*event_synchronize) (ggml_backend_dev_t dev, ggml_backend_event_t event);
-
-        // (optional) reset device, clearing existing allocations and context
-        // the caller must ensure that there are no outstanding buffers, as these will become invalid
-        void (*reset)(ggml_backend_dev_t dev);
     };
 
     struct ggml_backend_device {

@@ -82,8 +82,8 @@ func EnumerateGPUs() []Devices {
 			C.ggml_backend_dev_get_props(device, &props)
 			ids = append(ids, Devices{
 				DeviceID: ml.DeviceID{
-					ID:      C.GoString(props.id),
-					Library: C.GoString(props.library),
+					ID:      C.GoString(props.device_id),
+					Library: "", // GPU UUIDs patch skipped during llama.cpp upgrade to 2496f9c1
 				},
 				LlamaID: uint64(i),
 			})
@@ -352,7 +352,10 @@ func (m *Model) ApplyLoraFromFile(context *Context, loraPath string, scale float
 
 	err := -1
 	if loraAdapter != nil {
-		err = int(C.llama_set_adapter_lora(context.c, loraAdapter, C.float(scale)))
+		// Upstream renamed llama_set_adapter_lora -> llama_set_adapters_lora (takes an array)
+		// after llama.cpp upgrade to 2496f9c1.
+		cScale := C.float(scale)
+		err = int(C.llama_set_adapters_lora(context.c, &loraAdapter, 1, &cScale))
 	}
 	if err != 0 {
 		return errors.New("error applying lora from file")
