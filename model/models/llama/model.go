@@ -3,6 +3,7 @@ package llama
 import (
 	"cmp"
 	"math"
+	"strings"
 
 	"github.com/ollama/ollama/fs"
 	"github.com/ollama/ollama/kvcache"
@@ -59,6 +60,19 @@ func New(c fs.Config) (model.Model, error) {
 	switch c.String("tokenizer.ggml.model") {
 	case "gpt2":
 		var pretokenizers []string
+		// MiniCPM5 needs a dedicated pre-tokenizer (see upstream PR
+		// https://github.com/ggml-org/llama.cpp/pull/23384). The official GGUF
+		// from openbmb still labels tokenizer.ggml.pre as "llama-bpe" because
+		// that PR has not been merged yet, so detect by general.basename/name
+		// to apply the correct two-stage regex.
+		if name := c.String("general.basename") + " " + c.String("general.name"); strings.Contains(name, "MiniCPM5") {
+			pretokenizers = []string{
+				`\p{N}{1,3}`,
+				`(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}+| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+`,
+			}
+			processor = tokenizer.NewBytePairEncoding(&vocabulary, pretokenizers...)
+			break
+		}
 		switch c.String("tokenizer.ggml.pre") {
 		case "default":
 			// no-op use the default bpe pretokenizer
