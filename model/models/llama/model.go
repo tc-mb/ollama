@@ -59,26 +59,39 @@ func New(c fs.Config) (model.Model, error) {
 	switch c.String("tokenizer.ggml.model") {
 	case "gpt2":
 		var pretokenizers []string
-		switch c.String("tokenizer.ggml.pre") {
-		case "default":
-			// no-op use the default bpe pretokenizer
-		case "qwen2":
+		pre := c.String("tokenizer.ggml.pre")
+		// MiniCPM5 (released 2026-05) uses a two-stage BPE pretokenizer that
+		// is not yet upstream in llama.cpp; the PR adds it as "minicpm5"
+		// (https://github.com/ggml-org/llama.cpp/pull/23384). Until that lands
+		// and openbmb regenerates the official GGUFs, tokenizer.ggml.pre is
+		// still "llama-bpe", so we also fall back to detecting by basename.
+		if pre == "minicpm5" || c.String("general.basename") == "MiniCPM5" {
 			pretokenizers = []string{
-				"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+				`\p{N}{1,3}`,
+				`(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}+| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+`,
 			}
-		case "refact":
-			pretokenizers = []string{
-				`\p{N}`,
-				`'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+`,
-			}
-		case "tekken":
-			pretokenizers = []string{
-				"[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
-			}
-		default:
-			// use a llama-style pretokenizer
-			pretokenizers = []string{
-				"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+		} else {
+			switch pre {
+			case "default":
+				// no-op use the default bpe pretokenizer
+			case "qwen2":
+				pretokenizers = []string{
+					"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+				}
+			case "refact":
+				pretokenizers = []string{
+					`\p{N}`,
+					`'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+`,
+				}
+			case "tekken":
+				pretokenizers = []string{
+					"[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+				}
+			default:
+				// use a llama-style pretokenizer
+				pretokenizers = []string{
+					"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+				}
 			}
 		}
 		processor = tokenizer.NewBytePairEncoding(&vocabulary, pretokenizers...)
